@@ -9,6 +9,9 @@ from .utils import get_random_user_agent
 
 
 class BaseWrapper:
+
+    auth_cookies_to_look_for=['access_token_web','_vinted_fr_session']
+
     def __init__(
         self,
         baseurl: str,
@@ -46,7 +49,7 @@ class BaseWrapper:
             session_cookie if session_cookie is not None else self._fetch_cookie()
         )
 
-    def _fetch_cookie(self, proxies: Optional[Dict] = None, retries: int = 3) -> str:
+    def _fetch_cookie(self, proxies: Optional[Dict] = None, retries: int = 3) -> dict:
         """
         Send an HTTP GET request to the self.base_url to fetch the session cookie with retries.
 
@@ -70,8 +73,12 @@ class BaseWrapper:
             )
             if response.status_code == 200:
                 session_cookie = response.headers.get("Set-Cookie")
-                if session_cookie and "access_token_web=" in session_cookie:
-                    return session_cookie.split("access_token_web=")[1].split(";")[0]
+                result = {}
+                for cookie in self.auth_cookies_to_look_for:
+                    if session_cookie and cookie in session_cookie:
+                        result[cookie] = session_cookie.split(f"{cookie}=")[1].split(";")[0]
+                if result:
+                    return result
             else:
                 # Exponential backoff before retrying
                 time.sleep(2**_)
@@ -104,7 +111,9 @@ class BaseWrapper:
             "Referer": self.baseurl,
         }
         if include_cookie and self.session_cookie:
-            headers["Cookie"] = f"access_token_web={self.session_cookie}"
+            cookie_string = "; ".join([f"{key}={value}" for key, value in self.session_cookie.items()])
+            # Setting the header
+            headers["Cookie"] = cookie_string
         return headers
 
 
@@ -191,7 +200,7 @@ class VintedWrapper(BaseWrapper):
 
         if response.status_code == 200:
             return response.json()
-        elif response.status_code == 401:
+        elif response.status_code == 401 or response.status_code == 403:
             # Fetch (maybe is expired?) the session cookie again and retry the API call
             self.session_cookie = self._fetch_cookie()
             return self._curl(endpoint, params)
@@ -238,7 +247,7 @@ class AsyncVintedWrapper(BaseWrapper):
             timeout=timeout,
         )
 
-    async def _async_fetch_cookie(self, proxies: Optional[Dict] = None, retries: int = 3) -> str:
+    async def _async_fetch_cookie(self, proxies: Optional[Dict] = None, retries: int = 3) -> dict:
         """
         Send an async HTTP GET request to the self.base_url to fetch the session cookie with retries.
 
@@ -262,8 +271,12 @@ class AsyncVintedWrapper(BaseWrapper):
                 response = await client.get(self.baseurl)
                 if response.status_code == 200:
                     session_cookie = response.headers.get("Set-Cookie")
-                    if session_cookie and "access_token_web=" in session_cookie:
-                        return session_cookie.split("access_token_web=")[1].split(";")[0]
+                    result= {}
+                    for cookie in self.auth_cookies_to_look_for:
+                        if session_cookie and cookie in session_cookie:
+                            result[cookie]=session_cookie.split(f"{cookie}=")[1].split(";")[0]
+                    if result:
+                        return result
                 else:
                     # Exponential backoff before retrying
                     await asyncio.sleep(2**_)
@@ -322,7 +335,7 @@ class AsyncVintedWrapper(BaseWrapper):
 
         if response.status_code == 200:
             return response.json()
-        elif response.status_code == 401:
+        elif response.status_code == 401 or response.status_code == 403:
             # Fetch (maybe is expired?) the session cookie again and retry the API call
             self.session_cookie = await self._async_fetch_cookie()
             return await self._curl(endpoint, params)
